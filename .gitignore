@@ -1,0 +1,46 @@
+# ── Variáveis de ambiente (NUNCA commitar) ────────────────
+.env
+.env.local
+.env.*.local
+backend/.env
+frontend/.env
+
+# ── Python ────────────────────────────────────────────────
+*.pyc
+*.pyo
+*$py.class
+__pycache__/
+.venv/
+venv/
+env/
+*.egg-info/
+.eggs/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+*.log
+
+# ── Node / Frontend ───────────────────────────────────────
+node_modules/
+dist/
+frontend/dist/
+.vite/
+*.tsbuildinfo
+
+# ── OS ───────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+*.swp
+*.swo
+
+# ── Dados gerados por scripts ─────────────────────────────
+traffic_seed_data.json
+
+# ── Redis dump ────────────────────────────────────────────
+dump.rdb
+redis_data/
+

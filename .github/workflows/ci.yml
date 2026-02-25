@@ -1,0 +1,90 @@
+# ══════════════════════════════════════════════════════════════
+# CI — Lint, Test, Build (GitHub Actions)
+# ══════════════════════════════════════════════════════════════
+#
+# Roda a cada push/PR em main.
+# Jobs:
+#   1. backend-lint   — ruff + black check
+#   2. backend-test   — pytest
+#   3. frontend-build — npm ci + build
+#   4. docker-build   — build das imagens (não faz push)
+#
+# Para publicar imagens em registry, adicione etapa de push:
+#   docker tag weather-route-planner-backend:latest ghcr.io/<user>/weather-route-planner-backend:latest
+#   docker push ghcr.io/<user>/weather-route-planner-backend:latest
+# ══════════════════════════════════════════════════════════════
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "20"
+
+jobs:
+  # ── Backend Lint ─────────────────────────────────────────
+  backend-lint:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install ruff black isort
+      - run: ruff check .
+      - run: black --check .
+      - run: isort --check-only .
+
+  # ── Backend Tests ────────────────────────────────────────
+  backend-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./backend
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      ORS_API_KEY: ""
+      OPENWEATHER_API_KEY: ""
+      REDIS_URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install -r requirements.txt
+      - run: pytest -q --tb=short
+
+  # ── Frontend Build ───────────────────────────────────────
+  frontend-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - run: npm ci
+      - run: npm run build
+
+  # ── Docker Build (sem push) ──────────────────────────────
+  docker-build:
+    runs-on: ubuntu-latest
+    needs: [backend-test, frontend-build]
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t weather-route-planner-backend ./backend
+      - run: docker build -t weather-route-planner-frontend ./frontend

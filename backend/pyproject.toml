@@ -1,0 +1,27 @@
+[project]
+name = "weather-route-planner-backend"
+version = "2.0.0"
+description = "FastAPI backend for Weather Route Planner"
+requires-python = ">=3.11"
+
+[tool.black]
+line-length = 99
+target-version = ["py312"]
+
+[tool.isort]
+profile = "black"
+line_length = 99
+
+[tool.ruff]
+line-length = 99
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+python_files = "test_*.py"
