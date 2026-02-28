@@ -5,7 +5,7 @@
  */
 
 import { motion, AnimatePresence } from 'framer-motion'
-import { FiNavigation, FiClock, FiLoader, FiChevronDown, FiChevronUp, FiAlertTriangle, FiClock as FiTimer, FiChevronLeft, FiChevronRight, FiDollarSign } from 'react-icons/fi'
+import { FiNavigation, FiClock, FiLoader, FiChevronDown, FiChevronUp, FiAlertTriangle, FiClock as FiTimer, FiChevronLeft, FiChevronRight, FiDollarSign, FiEye } from 'react-icons/fi'
 import React, { useState, useMemo } from 'react'
 import SearchBox from './SearchBox'
 import TrafficBadge from './TrafficBadge'
@@ -274,6 +274,49 @@ export default function RoutePanel({ onAnalyze, onBestDeparture, loading, error,
               <div className={`px-3 py-2 rounded-lg text-sm font-medium ${RISK_COLORS[summary.overall_risk] || RISK_COLORS.none}`}>
                 {summary.recommendation}
               </div>
+
+              {/* Neblina */}
+              {summary.fog_risk && summary.fog_risk !== 'none' && (
+                <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
+                  ${ summary.fog_risk === 'high'     ? 'bg-gray-200 text-gray-800 dark:bg-gray-700 dark:text-gray-200'
+                   : summary.fog_risk === 'moderate' ? 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300'
+                                                     : 'bg-gray-50 text-gray-600 dark:bg-gray-800/50 dark:text-gray-400' }`}>
+                  <FiEye className="w-3.5 h-3.5 shrink-0" />
+                  🌫️ Neblina { summary.fog_risk === 'high' ? 'densa' : summary.fog_risk === 'moderate' ? 'moderada' : 'leve' } no trajeto
+                </div>
+              )}
+
+              {/* Carga do trânsito */}
+              {trafficSummary && (
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
+                    <span>🚦 Carga do trânsito</span>
+                    <span className="font-semibold text-gray-700 dark:text-gray-300">
+                      {Math.round(trafficSummary.avg_congestion_ratio * 100)}%
+                    </span>
+                  </div>
+                  <div className="h-2 w-full bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all duration-500"
+                      style={{
+                        width: `${Math.round(trafficSummary.avg_congestion_ratio * 100)}%`,
+                        background: trafficSummary.avg_congestion_ratio < 0.3 ? '#16a34a'
+                          : trafficSummary.avg_congestion_ratio < 0.6 ? '#ca8a04'
+                          : trafficSummary.avg_congestion_ratio < 0.8 ? '#ea580c'
+                          : '#dc2626',
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Semáforos */}
+              {summary.traffic_lights_delay_minutes > 0 && (
+                <div className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
+                  <FiTimer className="w-3.5 h-3.5" />
+                  Semáforos: ~{Math.round(summary.traffic_lights_delay_minutes)} min estimados
+                </div>
+              )}
 
               <div className="flex items-center justify-between text-sm text-gray-500 dark:text-gray-400">
                 <span>Confiança: {(summary.confidence * 100).toFixed(0)}%</span>

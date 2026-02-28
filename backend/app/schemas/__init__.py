@@ -55,6 +55,24 @@ class Coordinates(BaseModel):
     lon: float = Field(..., ge=-180, le=180, description="Longitude")
 
 
+class TollPoint(BaseModel):
+    """Ponto de pedágio identificado via OpenStreetMap."""
+    lat: float
+    lon: float
+    name: str = "Pedágio"
+    operator: str = ""
+
+
+class AccidentPoint(BaseModel):
+    """Acidente ou incidente de trânsito em tempo real (TomTom Incidents)."""
+    lat: float
+    lon: float
+    type: str = "Acidente"
+    severity: str = "unknown"   # minor / moderate / major / severe
+    description: str = ""
+    delay_minutes: float = 0.0
+
+
 # ═══════════════════════════════════════════════════════════════
 # Route — Request / Response
 # ═══════════════════════════════════════════════════════════════
@@ -99,6 +117,8 @@ class WeatherSample(BaseModel):
     temperature_c: Optional[float] = None
     wind_speed_kmh: Optional[float] = None
     humidity_percent: Optional[int] = None
+    visibility_m: Optional[int] = None
+    fog_risk: str = "none"         # none / low / moderate / high
     rain_risk: RainRisk = RainRisk.NONE
     source: str = Field("open-meteo", description="Provedor de dados")
     description: str = ""
@@ -149,6 +169,8 @@ class RouteSummary(BaseModel):
         ..., ge=0, le=1, description="Confiança dos dados (0-1)"
     )
     sources: list[str] = Field(default_factory=list)
+    fog_risk: str = "none"                      # none / low / moderate / high
+    traffic_lights_delay_minutes: float = 0.0   # atraso estimado em semáforos
 
 
 class RouteCreateResponse(BaseModel):
@@ -173,6 +195,8 @@ class RouteResultResponse(BaseModel):
     segments: Optional[list[RouteSegment]] = None
     traffic_summary: Optional[TrafficSummary] = None
     traffic_samples: Optional[list[TrafficSample]] = None
+    toll_points: Optional[list[TollPoint]] = None
+    accident_points: Optional[list[AccidentPoint]] = None
     created_at: Optional[str] = None
 
 

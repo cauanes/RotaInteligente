@@ -107,7 +107,10 @@ class WeatherClient:
                 params={
                     "latitude": lat,
                     "longitude": lon,
-                    "hourly": "temperature_2m,precipitation_probability,precipitation,windspeed_10m,relativehumidity_2m",
+                    "hourly": (
+                        "temperature_2m,precipitation_probability,precipitation,"
+                        "windspeed_10m,relativehumidity_2m,visibility,weathercode"
+                    ),
                     "start_date": start.isoformat(),
                     "end_date": end.isoformat(),
                     "timezone": "America/Sao_Paulo",
@@ -124,12 +127,18 @@ class WeatherClient:
         if idx is None:
             return None
 
+        visibility = (hourly.get("visibility") or [None])[idx]
+        weathercode = (hourly.get("weathercode") or [0])[idx]
+        fog_risk = self._classify_fog(visibility, weathercode)
+
         return {
             "temperature_c": (hourly.get("temperature_2m") or [None])[idx],
             "precip_prob": (hourly.get("precipitation_probability") or [0])[idx],
             "precip_mm": (hourly.get("precipitation") or [0.0])[idx],
             "wind_speed_kmh": (hourly.get("windspeed_10m") or [0.0])[idx],
             "humidity_percent": (hourly.get("relativehumidity_2m") or [None])[idx],
+            "visibility_m": int(visibility) if visibility is not None else None,
+            "fog_risk": fog_risk,
             "forecast_time": times[idx],
         }
 
@@ -198,12 +207,19 @@ class WeatherClient:
         prob = max(0, min(100, base_prob + random.randint(-15, 15)))
         mm = round(max(0, base_mm + random.uniform(-0.5, 1.0)), 1) if prob > 30 else 0
 
+        # Neblina é mais comum em madrugadas/manhãs frias
+        is_foggy = (0 <= hour <= 8) and random.random() < 0.15
+        visibility_m = random.randint(300, 800) if is_foggy else random.randint(8000, 25000)
+        fog_risk = self._classify_fog(visibility_m, None)
+
         return {
             "temperature_c": round(random.uniform(18, 32), 1),
             "precip_prob": prob,
             "precip_mm": mm,
             "wind_speed_kmh": round(random.uniform(5, 25), 1),
             "humidity_percent": random.randint(40, 95),
+            "visibility_m": visibility_m,
+            "fog_risk": fog_risk,
             "forecast_time": target_dt.isoformat(),
         }
 
@@ -229,6 +245,22 @@ class WeatherClient:
                 continue
         # Se diferença > 6h, dado é irrelevante
         return best_idx if best_idx is not None and best_diff < 6 * 3600 else None
+
+    @staticmethod
+    def _classify_fog(visibility_m, weathercode) -> str:
+        """Classifica risco de neblina a partir da visibilidade (m) e código WMO."""
+        code = int(weathercode or 0)
+        # WMO codes 40-49 = neblina / nevoeiro
+        if 40 <= code <= 49:
+            return "high"
+        vis = visibility_m if visibility_m is not None else 10000
+        if vis < 1000:
+            return "high"
+        if vis < 3000:
+            return "moderate"
+        if vis < 8000:
+            return "low"
+        return "none"
 
     @staticmethod
     def classify_risk(prob: int, mm: float) -> str:

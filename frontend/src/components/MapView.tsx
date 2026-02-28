@@ -9,7 +9,7 @@
 import maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import React, { useEffect, useRef, useState, useCallback } from 'react'
-import type { WeatherSample, TrafficSample } from '../services/api'
+import type { WeatherSample, TrafficSample, TollPoint, AccidentPoint } from '../services/api'
 import { useTheme } from '../contexts/ThemeContext'
 import { FiLayers, FiList, FiX, FiTarget } from 'react-icons/fi'
 import MapLegend from './MapLegend'
@@ -56,6 +56,8 @@ interface Props {
   routeGeometry?: { type: string; coordinates: number[][] }
   samples?: WeatherSample[]
   trafficSamples?: TrafficSample[]
+  tollPoints?: TollPoint[]
+  accidentPoints?: AccidentPoint[]
 }
 
 function rasterStyle(tileUrl: string): maplibregl.StyleSpecification {
@@ -68,7 +70,7 @@ function rasterStyle(tileUrl: string): maplibregl.StyleSpecification {
   }
 }
 
-export default function MapView({ routeGeometry, samples, trafficSamples }: Props) {
+export default function MapView({ routeGeometry, samples, trafficSamples, tollPoints, accidentPoints }: Props) {
   const mapContainer = useRef<HTMLDivElement>(null)
   const map = useRef<maplibregl.Map | null>(null)
   const clickPopupRef = useRef<maplibregl.Popup | null>(null)
@@ -81,11 +83,15 @@ export default function MapView({ routeGeometry, samples, trafficSamples }: Prop
   const routeGeomRef = useRef<{ type: string; coordinates: number[][] } | null>(null)
   const samplesRef = useRef<WeatherSample[] | null>(null)
   const cityNamesRef = useRef<Record<string, string>>({})
+  const tollPointsRef = useRef<TollPoint[]>([])
+  const accidentPointsRef = useRef<AccidentPoint[]>([])
 
   // Keep refs in sync
   useEffect(() => { if (routeGeometry) routeGeomRef.current = routeGeometry }, [routeGeometry])
   useEffect(() => { samplesRef.current = samples || null }, [samples])
   useEffect(() => { cityNamesRef.current = cityNames }, [cityNames])
+  useEffect(() => { tollPointsRef.current = tollPoints || [] }, [tollPoints])
+  useEffect(() => { accidentPointsRef.current = accidentPoints || [] }, [accidentPoints])
 
   const fitToRoute = useCallback(() => {
     if (!map.current || !routeGeomRef.current?.coordinates?.length) return
@@ -115,10 +121,12 @@ export default function MapView({ routeGeometry, samples, trafficSamples }: Prop
     return entry.raster ? rasterStyle(entry.url) : entry.url
   }
 
-  // ── Rebuild all layers (route + samples) ─────────────────────
+  // ── Rebuild all layers (route + samples + toll + accidents) ─────────────────────────
   function rebuildLayers() {
     addRouteLayers()
     addSampleLayers()
+    addTollLayers()
+    addAccidentLayers()
   }
 
   function addRouteLayers() {
@@ -147,6 +155,101 @@ export default function MapView({ routeGeometry, samples, trafficSamples }: Prop
       source: 'route',
       layout: { 'line-join': 'round', 'line-cap': 'round' },
       paint: { 'line-color': '#3b82f6', 'line-width': 4, 'line-opacity': 0.9 },
+    })
+  }
+
+  function addTollLayers() {
+    const m = map.current
+    const tolls = tollPointsRef.current
+    ;['toll-labels', 'toll-circles'].forEach((id) => { if (m?.getLayer(id)) m.removeLayer(id) })
+    if (m?.getSource('tolls')) m.removeSource('tolls')
+    if (!m || tolls.length === 0) return
+
+    m.addSource('tolls', {
+      type: 'geojson',
+      data: {
+        type: 'FeatureCollection',
+        features: tolls.map((t) => ({
+          type: 'Feature' as const,
+          geometry: { type: 'Point' as const, coordinates: [t.lon, t.lat] },
+          properties: { name: t.name, operator: t.operator },
+        })),
+      },
+    })
+    m.addLayer({
+      id: 'toll-circles',
+      type: 'circle',
+      source: 'tolls',
+      paint: {
+        'circle-radius': 7,
+        'circle-color': '#f59e0b',
+        'circle-stroke-width': 2,
+        'circle-stroke-color': '#ffffff',
+        'circle-opacity': 0.92,
+      },
+    })
+    m.addLayer({
+      id: 'toll-labels',
+      type: 'symbol',
+      source: 'tolls',
+      layout: {
+        'text-field': '$',
+        'text-size': 9,
+        'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
+        'text-anchor': 'center',
+        'text-allow-overlap': true,
+      },
+      paint: { 'text-color': '#ffffff' },
+    })
+  }
+
+  function addAccidentLayers() {
+    const m = map.current
+    const accidents = accidentPointsRef.current
+    ;['accident-labels', 'accident-circles'].forEach((id) => { if (m?.getLayer(id)) m.removeLayer(id) })
+    if (m?.getSource('accidents')) m.removeSource('accidents')
+    if (!m || accidents.length === 0) return
+
+    m.addSource('accidents', {
+      type: 'geojson',
+      data: {
+        type: 'FeatureCollection',
+        features: accidents.map((a) => ({
+          type: 'Feature' as const,
+          geometry: { type: 'Point' as const, coordinates: [a.lon, a.lat] },
+          properties: {
+            type: a.type,
+            severity: a.severity,
+            description: a.description,
+            delay_minutes: a.delay_minutes,
+          },
+        })),
+      },
+    })
+    m.addLayer({
+      id: 'accident-circles',
+      type: 'circle',
+      source: 'accidents',
+      paint: {
+        'circle-radius': 7,
+        'circle-color': '#ef4444',
+        'circle-stroke-width': 2,
+        'circle-stroke-color': '#ffffff',
+        'circle-opacity': 0.92,
+      },
+    })
+    m.addLayer({
+      id: 'accident-labels',
+      type: 'symbol',
+      source: 'accidents',
+      layout: {
+        'text-field': '!',
+        'text-size': 11,
+        'text-font': ['Open Sans Bold', 'Arial Unicode MS Bold'],
+        'text-anchor': 'center',
+        'text-allow-overlap': true,
+      },
+      paint: { 'text-color': '#ffffff' },
     })
   }
 
@@ -180,6 +283,8 @@ export default function MapView({ routeGeometry, samples, trafficSamples }: Prop
           precip_mm: sample.precip_mm,
           temperature_c: sample.temperature_c,
           wind_speed_kmh: sample.wind_speed_kmh,
+          visibility_m: sample.visibility_m,
+          fog_risk: sample.fog_risk || 'none',
           timestamp: sample.timestamp,
           source: sample.source,
           description: sample.description,
@@ -271,6 +376,7 @@ export default function MapView({ routeGeometry, samples, trafficSamples }: Prop
             🌧️ ${p.precip_prob}% · ${p.precip_mm}mm<br/>
             ${p.temperature_c != null ? `🌡️ ${p.temperature_c}°C<br/>` : ''}
             ${p.wind_speed_kmh != null ? `💨 ${p.wind_speed_kmh} km/h<br/>` : ''}
+            ${p.fog_risk && p.fog_risk !== 'none' ? `🌫️ Neblina ${p.fog_risk === 'high' ? 'densa' : p.fog_risk === 'moderate' ? 'moderada' : 'leve'}${p.visibility_m != null ? ` (${(p.visibility_m / 1000).toFixed(1)} km)` : ''}<br/>` : ''}
             ⏰ ${new Date(p.timestamp).toLocaleString('pt-BR', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', timeZone: TZ })}<br/>
             📡 ${p.source}
           </div>`
@@ -296,6 +402,7 @@ export default function MapView({ routeGeometry, samples, trafficSamples }: Prop
             🌧️ ${p.precip_prob}% · ${p.precip_mm}mm<br/>
             ${p.temperature_c != null ? `🌡️ ${p.temperature_c}°C<br/>` : ''}
             ${p.wind_speed_kmh != null ? `💨 ${p.wind_speed_kmh} km/h<br/>` : ''}
+            ${p.fog_risk && p.fog_risk !== 'none' ? `🌫️ Neblina ${p.fog_risk === 'high' ? 'densa' : p.fog_risk === 'moderate' ? 'moderada' : 'leve'}${p.visibility_m != null ? ` (${(p.visibility_m / 1000).toFixed(1)} km)` : ''}<br/>` : ''}
             ⏰ ${new Date(p.timestamp).toLocaleString('pt-BR', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', timeZone: TZ })}<br/>
             📡 ${p.source}
           </div>
@@ -305,6 +412,52 @@ export default function MapView({ routeGeometry, samples, trafficSamples }: Prop
     m.on('mouseleave', 'samples-circles', () => {
       m.getCanvas().style.cursor = ''
       // Remove hover popup only
+      hoverPopupRef.current?.remove()
+      hoverPopupRef.current = null
+    })
+
+    // ── Toll points: hover popup ──────────────────────────────
+    m.on('mouseenter', 'toll-circles', (e) => {
+      if (!e.features?.[0]) return
+      const coords = (e.features[0].geometry as any).coordinates.slice()
+      const p = e.features[0].properties!
+      m.getCanvas().style.cursor = 'pointer'
+      hoverPopupRef.current?.remove()
+      hoverPopupRef.current = new maplibregl.Popup({ offset: 8, closeButton: false, maxWidth: '180px' })
+        .setLngLat(coords)
+        .setHTML(`
+          <div style="font-family:system-ui;font-size:11px;line-height:1.6">
+            <span style="display:inline-block;background:#f59e0b;color:#fff;font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px;margin-bottom:2px">💰 Pedágio</span><br/>
+            <b>${p.name || 'Pedágio'}</b>${p.operator ? `<br/>🏢 ${p.operator}` : ''}
+          </div>`)
+        .addTo(m)
+    })
+    m.on('mouseleave', 'toll-circles', () => {
+      m.getCanvas().style.cursor = ''
+      hoverPopupRef.current?.remove()
+      hoverPopupRef.current = null
+    })
+
+    // ── Accident points: hover popup ──────────────────────────
+    m.on('mouseenter', 'accident-circles', (e) => {
+      if (!e.features?.[0]) return
+      const coords = (e.features[0].geometry as any).coordinates.slice()
+      const p = e.features[0].properties!
+      m.getCanvas().style.cursor = 'pointer'
+      hoverPopupRef.current?.remove()
+      const delayText = p.delay_minutes > 0 ? `<br/>⏱️ +${p.delay_minutes} min de atraso` : ''
+      hoverPopupRef.current = new maplibregl.Popup({ offset: 8, closeButton: false, maxWidth: '200px' })
+        .setLngLat(coords)
+        .setHTML(`
+          <div style="font-family:system-ui;font-size:11px;line-height:1.6">
+            <span style="display:inline-block;background:#ef4444;color:#fff;font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px;margin-bottom:2px">⚠️ ${p.type || 'Acidente'}</span><br/>
+            ${p.description ? `${p.description}<br/>` : ''}
+            Gravidade: ${p.severity || 'desconhecida'}${delayText}
+          </div>`)
+        .addTo(m)
+    })
+    m.on('mouseleave', 'accident-circles', () => {
+      m.getCanvas().style.cursor = ''
       hoverPopupRef.current?.remove()
       hoverPopupRef.current = null
     })
@@ -335,6 +488,20 @@ export default function MapView({ routeGeometry, samples, trafficSamples }: Prop
     if (map.current.isStyleLoaded()) addSampleLayers()
     else map.current.once('styledata', () => addSampleLayers())
   }, [samples, cityNames])
+
+  // ── Toll points change ───────────────────────────────────────
+  useEffect(() => {
+    if (!map.current) return
+    if (map.current.isStyleLoaded()) addTollLayers()
+    else map.current.once('styledata', () => addTollLayers())
+  }, [tollPoints])
+
+  // ── Accident points change ────────────────────────────────────
+  useEffect(() => {
+    if (!map.current) return
+    if (map.current.isStyleLoaded()) addAccidentLayers()
+    else map.current.once('styledata', () => addAccidentLayers())
+  }, [accidentPoints])
 
   // ── Reverse geocode ──────────────────────────────────────────
   useEffect(() => {

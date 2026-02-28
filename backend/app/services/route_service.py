@@ -8,12 +8,14 @@ consultar trânsito, classificar riscos e montar a resposta final.
 Todos os horários usam America/Sao_Paulo (BRT/BRST).
 """
 
+import asyncio
 from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.clients.geocoding_client import GeocodingClient
 from app.clients.openroute_client import OpenRouteClient
+from app.clients.toll_client import TollClient
 from app.clients.traffic_client import TrafficClient
 from app.clients.weather_client import WeatherClient
 from app.core.background import RouteStatus, get_job, update_job, persist_job_to_cache
@@ -39,6 +41,7 @@ class RouteService:
         self.routing = OpenRouteClient()
         self.weather = WeatherClient()
         self.traffic = TrafficClient()
+        self.toll = TollClient()
         self.geocoding = GeocodingClient()
 
     # ── Pipeline completo (chamado em background) ────────────────
@@ -114,21 +117,38 @@ class RouteService:
                     "temperature_c": forecast.get("temperature_c"),
                     "wind_speed_kmh": forecast.get("wind_speed_kmh"),
                     "humidity_percent": forecast.get("humidity_percent"),
+                    "visibility_m": forecast.get("visibility_m"),
+                    "fog_risk": forecast.get("fog_risk", "none"),
                     "rain_risk": risk,
                     "source": source,
                     "description": desc,
                 })
 
-            # 4. Busca dados de trânsito para cada ponto da rota
-            traffic_data = await self.traffic.get_route_traffic(
-                points, departure_time, route_data["duration_min"]
+            # 4. Bounding box dos pontos da rota
+            lats = [p[0] for p in points]
+            lons = [p[1] for p in points]
+            min_lat, max_lat = min(lats), max(lats)
+            min_lon, max_lon = min(lons), max(lons)
+
+            # 5. Busca trânsito, pedágios e acidentes em paralelo
+            traffic_data, toll_points, accident_points = await asyncio.gather(
+                self.traffic.get_route_traffic(
+                    points, departure_time, route_data["duration_min"]
+                ),
+                self.toll.get_toll_points(min_lat, min_lon, max_lat, max_lon),
+                self.traffic.get_incidents(min_lat, min_lon, max_lat, max_lon),
             )
 
-            # 5. Calcula segmentos e resumo (clima)
-            segments = self._build_segments(samples)
-            summary = self._build_summary(route_data, samples, list(sources_set))
+            # 6. Estima atraso em semáforos
+            traffic_lights_delay = self._estimate_traffic_lights(route_data, points)
 
-            # 6. Salva resultado completo
+            # 7. Calcula segmentos e resumo (clima)
+            segments = self._build_segments(samples)
+            summary = self._build_summary(
+                route_data, samples, list(sources_set), traffic_lights_delay
+            )
+
+            # 8. Salva resultado completo
             result = {
                 "route_id": route_id,
                 "status": RouteStatus.COMPLETED,
@@ -138,6 +158,8 @@ class RouteService:
                 "segments": segments,
                 "traffic_summary": traffic_data["summary"],
                 "traffic_samples": traffic_data["samples"],
+                "toll_points": toll_points,
+                "accident_points": accident_points,
             }
 
             update_job(route_id, status=RouteStatus.COMPLETED, result=result)
@@ -188,11 +210,36 @@ class RouteService:
         })
         return segments
 
+    def _estimate_traffic_lights(
+        self,
+        route_data: dict,
+        points: list[tuple[float, float]],
+    ) -> float:
+        """
+        Estima o tempo perdido em semáforos ao longo da rota.
+
+        Heurística:
+        - Trecho urbano (próximo de capital): ~1 sinal a cada 400 m, 25 s de atraso cada
+          ≈ 0,625 min/km
+        - Trecho rodoviário: ~1 sinal a cada 10 km ≈ 0,04 min/km
+        """
+        distance_km = route_data["distance_km"]
+        urban_count = sum(
+            1 for lat, lon in points
+            if self.traffic._city_proximity_factor(lat, lon) > 1.0
+        )
+        urban_fraction = urban_count / max(len(points), 1)
+        urban_km = distance_km * urban_fraction
+        highway_km = distance_km - urban_km
+        delay_min = urban_km * 0.625 + highway_km * 0.04
+        return round(delay_min, 1)
+
     def _build_summary(
         self,
         route_data: dict,
         samples: list[dict],
         sources: list[str],
+        traffic_lights_delay: float = 0.0,
     ) -> dict:
         rain_count = sum(1 for s in samples if s["precip_prob"] > 20)
         risks = [s["rain_risk"] for s in samples]
@@ -202,6 +249,14 @@ class RouteService:
             RainRisk.HIGH: 3, RainRisk.VERY_HIGH: 4,
         }
         overall = max(risks, key=lambda r: risk_order.get(r, 0)) if risks else RainRisk.NONE
+
+        # Pior risco de neblina entre todos os pontos
+        fog_order = {"none": 0, "low": 1, "moderate": 2, "high": 3}
+        worst_fog = max(
+            (s.get("fog_risk", "none") for s in samples),
+            key=lambda r: fog_order.get(r, 0),
+            default="none",
+        )
 
         recs = {
             RainRisk.NONE: "✅ Viagem tranquila, sem previsão de chuva significativa.",
@@ -222,4 +277,6 @@ class RouteService:
             "recommendation": recs.get(overall, "Sem recomendação."),
             "confidence": conf,
             "sources": sources,
+            "fog_risk": worst_fog,
+            "traffic_lights_delay_minutes": traffic_lights_delay,
         }

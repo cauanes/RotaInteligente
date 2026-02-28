@@ -98,6 +98,81 @@ class TrafficClient:
             "samples": samples,
         }
 
+    # ── Incidents (acidentes e ocorrências) ──────────────────────
+
+    async def get_incidents(
+        self,
+        min_lat: float,
+        min_lon: float,
+        max_lat: float,
+        max_lon: float,
+    ) -> list[dict[str, Any]]:
+        """
+        Retorna acidentes e incidentes de trânsito na bounding box.
+        Usa TomTom Traffic Incidents API (requer TOMTOM_API_KEY).
+        Sem chave: retorna lista vazia (sem fallback heurístico para incidentes reais).
+        """
+        if not settings.TOMTOM_API_KEY:
+            return []
+        try:
+            return await self._fetch_tomtom_incidents(min_lat, min_lon, max_lat, max_lon)
+        except Exception as exc:
+            print(f"⚠️  TomTom Incidents: {exc}")
+            return []
+
+    async def _fetch_tomtom_incidents(
+        self,
+        min_lat: float,
+        min_lon: float,
+        max_lat: float,
+        max_lon: float,
+    ) -> list[dict[str, Any]]:
+        """
+        TomTom Traffic Incidents Details API v5.
+        Docs: https://developer.tomtom.com/traffic-api/documentation/traffic-incidents/incident-details
+        """
+        _type_map: dict[int, str] = {
+            0: "Desconhecido", 1: "Acidente", 2: "Neblina", 3: "Perigo",
+            4: "Obras",        5: "Bloqueio", 6: "Congestionamento",
+            7: "Evento",       8: "Gelo",     9: "Chuva forte",
+        }
+        _severity_map: dict[int, str] = {
+            0: "minor", 1: "minor", 2: "moderate", 3: "major", 4: "severe",
+        }
+
+        async with HTTPClient() as http:
+            data = await http.get(
+                f"{settings.TOMTOM_BASE_URL}/traffic/services/5/incidentDetails",
+                params={
+                    "key": settings.TOMTOM_API_KEY,
+                    "bbox": f"{min_lon},{min_lat},{max_lon},{max_lat}",
+                    "categoryFilter": "0,1,2,3,4,5,6,7,8,9,10,11,14",
+                    "timeValidityFilter": "present",
+                    "language": "pt-BR",
+                },
+            )
+
+        incidents: list[dict[str, Any]] = []
+        for incident in data.get("incidents", []):
+            geo = incident.get("geometry", {})
+            coords = geo.get("coordinates", [None, None])
+            if not coords or None in coords:
+                continue
+            props = incident.get("properties", {})
+            category = int(props.get("iconCategory", 0))
+            events: list[dict] = props.get("events") or [{}]
+            desc = events[0].get("description", "") if events else ""
+            delay_s = props.get("delay", 0) or 0
+            incidents.append({
+                "lat": coords[1],
+                "lon": coords[0],
+                "type": _type_map.get(category, "Incidente"),
+                "severity": _severity_map.get(props.get("magnitudeOfDelay", 0), "unknown"),
+                "description": desc,
+                "delay_minutes": round(delay_s / 60, 1),
+            })
+        return incidents
+
     # ── TomTom Traffic Flow API ──────────────────────────────────
 
     async def _fetch_tomtom(self, lat: float, lon: float) -> dict[str, Any]:

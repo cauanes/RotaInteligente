@@ -37,6 +37,8 @@ export interface WeatherSample {
   temperature_c: number | null
   wind_speed_kmh: number | null
   humidity_percent: number | null
+  visibility_m: number | null
+  fog_risk: string           // 'none' | 'low' | 'moderate' | 'high'
   rain_risk: string
   source: string
   description: string
@@ -51,6 +53,24 @@ export interface RouteSummary {
   recommendation: string
   confidence: number
   sources: string[]
+  fog_risk: string                        // 'none' | 'low' | 'moderate' | 'high'
+  traffic_lights_delay_minutes: number    // atraso estimado em semáforos
+}
+
+export interface TollPoint {
+  lat: number
+  lon: number
+  name: string
+  operator: string
+}
+
+export interface AccidentPoint {
+  lat: number
+  lon: number
+  type: string
+  severity: string
+  description: string
+  delay_minutes: number
 }
 
 export interface RouteResult {
@@ -63,6 +83,8 @@ export interface RouteResult {
   segments?: any[]
   traffic_summary?: TrafficSummary
   traffic_samples?: TrafficSample[]
+  toll_points?: TollPoint[]
+  accident_points?: AccidentPoint[]
 }
 
 export interface TrafficSummary {

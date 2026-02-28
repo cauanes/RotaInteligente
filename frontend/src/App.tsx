@@ -132,6 +132,8 @@ export default function App() {
           routeGeometry={result?.route_geometry}
           samples={result?.samples}
           trafficSamples={result?.traffic_samples}
+          tollPoints={result?.toll_points}
+          accidentPoints={result?.accident_points}
         />
 
         {/* Painel lateral flutuante */}
