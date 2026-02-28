@@ -29,6 +29,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<RouteResult | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [navigationMode, setNavigationMode] = useState(false)
 
   // Best departure state
   const [bestDepOpen, setBestDepOpen] = useState(false)
@@ -134,6 +135,10 @@ export default function App() {
           trafficSamples={result?.traffic_samples}
           tollPoints={result?.toll_points}
           accidentPoints={result?.accident_points}
+          congestionSegments={result?.congestion_segments}
+          trafficLightPoints={result?.traffic_light_points}
+          navigationMode={navigationMode}
+          onNavigationEnd={() => setNavigationMode(false)}
         />
 
         {/* Painel lateral flutuante */}

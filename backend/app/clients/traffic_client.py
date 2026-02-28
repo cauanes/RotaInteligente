@@ -18,6 +18,15 @@ from app.core.config import get_settings
 
 settings = get_settings()
 
+# Cores para cada nível de congestionamento (usadas no frontend)
+CONGESTION_COLORS: dict[str, str] = {
+    "free": "#16a34a",       # green
+    "light": "#84cc16",      # lime-green
+    "moderate": "#eab308",   # yellow
+    "heavy": "#f97316",      # orange
+    "severe": "#dc2626",     # red
+}
+
 
 class TrafficClient:
     """Consulta dados de trânsito em tempo real + fallback heurístico."""
@@ -97,6 +106,108 @@ class TrafficClient:
             },
             "samples": samples,
         }
+
+    async def build_congestion_segments(
+        self,
+        route_coordinates: list[list[float]],
+        departure_time: datetime,
+        duration_minutes: float,
+    ) -> list[dict[str, Any]]:
+        """
+        Constrói segmentos de congestionamento para toda a geometria da rota.
+        Cada segmento agrupa coordenadas consecutivas com o mesmo nível de
+        congestionamento, produzindo LineStrings coloridas para o frontend.
+
+        Para economizar chamadas à API, amostra a cada N pontos e interpola
+        o nível de congestionamento para os pontos intermediários.
+        """
+        coords = route_coordinates  # [[lon, lat], ...]
+        total = len(coords)
+        if total < 2:
+            return []
+
+        # Amostragem: consulta no máximo 1 ponto a cada ~20 coords (~2-3 km)
+        sample_interval = max(1, total // min(total, 50))
+        sampled_levels: dict[int, dict[str, Any]] = {}
+
+        for idx in range(0, total, sample_interval):
+            lon, lat = coords[idx][0], coords[idx][1]
+            progress = idx / max(total - 1, 1)
+            from datetime import timedelta
+            eta = departure_time + timedelta(minutes=progress * duration_minutes)
+            flow = await self.get_traffic_flow(lat, lon, eta)
+            sampled_levels[idx] = flow
+
+        # Também garante o último ponto
+        if (total - 1) not in sampled_levels:
+            lon, lat = coords[-1][0], coords[-1][1]
+            flow = await self.get_traffic_flow(lat, lon, departure_time)
+            sampled_levels[total - 1] = flow
+
+        # Interpola nível para todos os pontos
+        sorted_keys = sorted(sampled_levels.keys())
+        per_point_levels: list[str] = []
+        per_point_ratios: list[float] = []
+        per_point_speeds: list[float] = []
+
+        for i in range(total):
+            # Encontra os dois samples mais próximos
+            lo_key = max(k for k in sorted_keys if k <= i) if any(k <= i for k in sorted_keys) else sorted_keys[0]
+            hi_key = min(k for k in sorted_keys if k >= i) if any(k >= i for k in sorted_keys) else sorted_keys[-1]
+
+            if lo_key == hi_key:
+                data = sampled_levels[lo_key]
+            else:
+                # Interpolação linear do ratio
+                t = (i - lo_key) / (hi_key - lo_key)
+                lo_data = sampled_levels[lo_key]
+                hi_data = sampled_levels[hi_key]
+                ratio = lo_data["congestion_ratio"] * (1 - t) + hi_data["congestion_ratio"] * t
+                speed = lo_data["current_speed_kmh"] * (1 - t) + hi_data["current_speed_kmh"] * t
+                data = {
+                    "congestion_ratio": ratio,
+                    "congestion_level": self._level_from_ratio(ratio),
+                    "current_speed_kmh": speed,
+                }
+
+            per_point_levels.append(data.get("congestion_level", "free"))
+            per_point_ratios.append(data.get("congestion_ratio", 0.0))
+            per_point_speeds.append(data.get("current_speed_kmh", 60.0))
+
+        # Agrupa coordenadas consecutivas com o mesmo nível
+        segments: list[dict[str, Any]] = []
+        seg_start = 0
+        current_level = per_point_levels[0]
+
+        for i in range(1, total):
+            if per_point_levels[i] != current_level:
+                # Fecha segmento anterior (inclui ponto i como overlap para continuidade)
+                seg_coords = coords[seg_start:i + 1]
+                avg_ratio = sum(per_point_ratios[seg_start:i]) / max(i - seg_start, 1)
+                avg_speed = sum(per_point_speeds[seg_start:i]) / max(i - seg_start, 1)
+                segments.append({
+                    "coordinates": seg_coords,
+                    "congestion_level": current_level,
+                    "congestion_ratio": round(avg_ratio, 2),
+                    "avg_speed_kmh": round(avg_speed, 1),
+                    "color": CONGESTION_COLORS.get(current_level, "#3b82f6"),
+                })
+                seg_start = i
+                current_level = per_point_levels[i]
+
+        # Último segmento
+        seg_coords = coords[seg_start:]
+        avg_ratio = sum(per_point_ratios[seg_start:]) / max(total - seg_start, 1)
+        avg_speed = sum(per_point_speeds[seg_start:]) / max(total - seg_start, 1)
+        segments.append({
+            "coordinates": seg_coords,
+            "congestion_level": current_level,
+            "congestion_ratio": round(avg_ratio, 2),
+            "avg_speed_kmh": round(avg_speed, 1),
+            "color": CONGESTION_COLORS.get(current_level, "#3b82f6"),
+        })
+
+        return segments
 
     # ── Incidents (acidentes e ocorrências) ──────────────────────
 

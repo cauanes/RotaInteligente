@@ -73,6 +73,25 @@ export interface AccidentPoint {
   delay_minutes: number
 }
 
+export interface CongestionSegment {
+  coordinates: number[][]   // [[lon, lat], ...]
+  congestion_level: string  // free | light | moderate | heavy | severe
+  congestion_ratio: number
+  avg_speed_kmh: number
+  color: string             // hex color for rendering
+}
+
+export interface TrafficLightPoint {
+  lat: number
+  lon: number
+  osm_id: number
+  name: string
+  green_duration: number
+  yellow_duration: number
+  red_duration: number
+  distance_m?: number       // present when querying nearby-signals
+}
+
 export interface RouteResult {
   route_id: string
   status: 'pending' | 'processing' | 'completed' | 'failed'
@@ -85,6 +104,8 @@ export interface RouteResult {
   traffic_samples?: TrafficSample[]
   toll_points?: TollPoint[]
   accident_points?: AccidentPoint[]
+  congestion_segments?: CongestionSegment[]
+  traffic_light_points?: TrafficLightPoint[]
 }
 
 export interface TrafficSummary {
@@ -190,6 +211,15 @@ export async function getBestDeparture(
 
 export async function getHolidays(year?: number) {
   const { data } = await api.get('/holidays', { params: year ? { year } : {} })
+  return data
+}
+
+export async function getNearbySignals(
+  lat: number, lon: number, radiusM: number = 500,
+): Promise<{ signals: TrafficLightPoint[]; count: number }> {
+  const { data } = await api.get('/nearby-signals', {
+    params: { lat, lon, radius_m: radiusM },
+  })
   return data
 }
 

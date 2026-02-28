@@ -73,6 +73,29 @@ class AccidentPoint(BaseModel):
     delay_minutes: float = 0.0
 
 
+class CongestionSegment(BaseModel):
+    """Segmento da rota com nível de congestionamento para coloração no mapa."""
+    coordinates: list[list[float]] = Field(
+        ..., description="Lista de [lon, lat] do segmento (formato GeoJSON)"
+    )
+    congestion_level: CongestionLevel = CongestionLevel.FREE
+    congestion_ratio: float = Field(0.0, ge=0, le=1)
+    avg_speed_kmh: float = 60.0
+    color: str = "#16a34a"  # hex color for frontend convenience
+
+
+class TrafficLightPoint(BaseModel):
+    """Semáforo identificado via OpenStreetMap (Overpass API)."""
+    lat: float
+    lon: float
+    osm_id: int = 0
+    name: str = ""
+    # Ciclo simulado (em segundos)
+    green_duration: int = 30
+    yellow_duration: int = 3
+    red_duration: int = 20
+
+
 # ═══════════════════════════════════════════════════════════════
 # Route — Request / Response
 # ═══════════════════════════════════════════════════════════════
@@ -197,6 +220,8 @@ class RouteResultResponse(BaseModel):
     traffic_samples: Optional[list[TrafficSample]] = None
     toll_points: Optional[list[TollPoint]] = None
     accident_points: Optional[list[AccidentPoint]] = None
+    congestion_segments: Optional[list[CongestionSegment]] = None
+    traffic_light_points: Optional[list[TrafficLightPoint]] = None
     created_at: Optional[str] = None
 
 

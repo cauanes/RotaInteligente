@@ -9,9 +9,9 @@
 import maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import React, { useEffect, useRef, useState, useCallback } from 'react'
-import type { WeatherSample, TrafficSample, TollPoint, AccidentPoint } from '../services/api'
+import type { WeatherSample, TrafficSample, TollPoint, AccidentPoint, CongestionSegment, TrafficLightPoint } from '../services/api'
 import { useTheme } from '../contexts/ThemeContext'
-import { FiLayers, FiList, FiX, FiTarget } from 'react-icons/fi'
+import { FiLayers, FiList, FiX, FiTarget, FiNavigation } from 'react-icons/fi'
 import MapLegend from './MapLegend'
 
 const TZ = 'America/Sao_Paulo'
@@ -58,6 +58,10 @@ interface Props {
   trafficSamples?: TrafficSample[]
   tollPoints?: TollPoint[]
   accidentPoints?: AccidentPoint[]
+  congestionSegments?: CongestionSegment[]
+  trafficLightPoints?: TrafficLightPoint[]
+  navigationMode?: boolean
+  onNavigationEnd?: () => void
 }
 
 function rasterStyle(tileUrl: string): maplibregl.StyleSpecification {
@@ -70,11 +74,13 @@ function rasterStyle(tileUrl: string): maplibregl.StyleSpecification {
   }
 }
 
-export default function MapView({ routeGeometry, samples, trafficSamples, tollPoints, accidentPoints }: Props) {
+export default function MapView({ routeGeometry, samples, trafficSamples, tollPoints, accidentPoints, congestionSegments, trafficLightPoints, navigationMode, onNavigationEnd }: Props) {
   const mapContainer = useRef<HTMLDivElement>(null)
   const map = useRef<maplibregl.Map | null>(null)
   const clickPopupRef = useRef<maplibregl.Popup | null>(null)
   const hoverPopupRef = useRef<maplibregl.Popup | null>(null)
+  const geolocateRef = useRef<maplibregl.GeolocateControl | null>(null)
+  const userMarkerRef = useRef<maplibregl.Marker | null>(null)
   const { theme } = useTheme()
   const [style, setStyle] = useState<string>('streets')
   const [showLayerMenu, setShowLayerMenu] = useState(false)
@@ -85,6 +91,8 @@ export default function MapView({ routeGeometry, samples, trafficSamples, tollPo
   const cityNamesRef = useRef<Record<string, string>>({})
   const tollPointsRef = useRef<TollPoint[]>([])
   const accidentPointsRef = useRef<AccidentPoint[]>([])
+  const congestionSegmentsRef = useRef<CongestionSegment[]>([])
+  const trafficLightPointsRef = useRef<TrafficLightPoint[]>([])
 
   // Keep refs in sync
   useEffect(() => { if (routeGeometry) routeGeomRef.current = routeGeometry }, [routeGeometry])
@@ -92,6 +100,8 @@ export default function MapView({ routeGeometry, samples, trafficSamples, tollPo
   useEffect(() => { cityNamesRef.current = cityNames }, [cityNames])
   useEffect(() => { tollPointsRef.current = tollPoints || [] }, [tollPoints])
   useEffect(() => { accidentPointsRef.current = accidentPoints || [] }, [accidentPoints])
+  useEffect(() => { congestionSegmentsRef.current = congestionSegments || [] }, [congestionSegments])
+  useEffect(() => { trafficLightPointsRef.current = trafficLightPoints || [] }, [trafficLightPoints])
 
   const fitToRoute = useCallback(() => {
     if (!map.current || !routeGeomRef.current?.coordinates?.length) return
@@ -121,12 +131,14 @@ export default function MapView({ routeGeometry, samples, trafficSamples, tollPo
     return entry.raster ? rasterStyle(entry.url) : entry.url
   }
 
-  // ── Rebuild all layers (route + samples + toll + accidents) ─────────────────────────
+  // ── Rebuild all layers (route + samples + toll + accidents + congestion + signals) ──
   function rebuildLayers() {
     addRouteLayers()
+    addCongestionLayers()
     addSampleLayers()
     addTollLayers()
     addAccidentLayers()
+    addTrafficLightLayers()
   }
 
   function addRouteLayers() {
@@ -138,6 +150,9 @@ export default function MapView({ routeGeometry, samples, trafficSamples, tollPo
     if (m.getLayer('route-outline')) m.removeLayer('route-outline')
     if (m.getSource('route')) m.removeSource('route')
 
+    // When congestion segments are available, use reduced opacity for base route
+    const hasCongestion = congestionSegmentsRef.current.length > 0
+
     m.addSource('route', {
       type: 'geojson',
       data: { type: 'Feature', properties: {}, geometry: geom as any },
@@ -147,15 +162,21 @@ export default function MapView({ routeGeometry, samples, trafficSamples, tollPo
       type: 'line',
       source: 'route',
       layout: { 'line-join': 'round', 'line-cap': 'round' },
-      paint: { 'line-color': '#1d4ed8', 'line-width': 7, 'line-opacity': 0.35 },
+      paint: {
+        'line-color': hasCongestion ? '#94a3b8' : '#1d4ed8',
+        'line-width': hasCongestion ? 3 : 7,
+        'line-opacity': hasCongestion ? 0.15 : 0.35,
+      },
     })
-    m.addLayer({
-      id: 'route-line',
-      type: 'line',
-      source: 'route',
-      layout: { 'line-join': 'round', 'line-cap': 'round' },
-      paint: { 'line-color': '#3b82f6', 'line-width': 4, 'line-opacity': 0.9 },
-    })
+    if (!hasCongestion) {
+      m.addLayer({
+        id: 'route-line',
+        type: 'line',
+        source: 'route',
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: { 'line-color': '#3b82f6', 'line-width': 4, 'line-opacity': 0.9 },
+      })
+    }
   }
 
   function addTollLayers() {
@@ -250,6 +271,123 @@ export default function MapView({ routeGeometry, samples, trafficSamples, tollPo
         'text-allow-overlap': true,
       },
       paint: { 'text-color': '#ffffff' },
+    })
+  }
+
+  // ── Congestion segments (color-coded route line) ───────────────
+  function addCongestionLayers() {
+    const m = map.current
+    const segments = congestionSegmentsRef.current
+    if (!m) return
+
+    // Remove existing congestion layers
+    const existingLayers = m.getStyle()?.layers || []
+    existingLayers.forEach((l: any) => {
+      if (l.id.startsWith('congestion-seg-')) m.removeLayer(l.id)
+    })
+    // Remove sources
+    const existingSources = Object.keys(m.getStyle()?.sources || {})
+    existingSources.forEach((s) => {
+      if (s.startsWith('congestion-seg-')) m.removeSource(s)
+    })
+
+    if (!segments || segments.length === 0) return
+
+    // Add each segment as a separate source + layer with its color
+    segments.forEach((seg, idx) => {
+      const sourceId = `congestion-seg-${idx}`
+      const lineId = `congestion-seg-line-${idx}`
+      const outlineId = `congestion-seg-outline-${idx}`
+
+      m.addSource(sourceId, {
+        type: 'geojson',
+        data: {
+          type: 'Feature',
+          properties: {
+            congestion_level: seg.congestion_level,
+            color: seg.color,
+          },
+          geometry: {
+            type: 'LineString',
+            coordinates: seg.coordinates,
+          },
+        },
+      })
+
+      // Outline (wider, semi-transparent)
+      m.addLayer({
+        id: outlineId,
+        type: 'line',
+        source: sourceId,
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': seg.color,
+          'line-width': 8,
+          'line-opacity': 0.3,
+        },
+      })
+
+      // Main line
+      m.addLayer({
+        id: lineId,
+        type: 'line',
+        source: sourceId,
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': seg.color,
+          'line-width': 5,
+          'line-opacity': 0.9,
+        },
+      })
+    })
+  }
+
+  // ── Traffic light points ───────────────────────────────────────
+  function addTrafficLightLayers() {
+    const m = map.current
+    const signals = trafficLightPointsRef.current
+    ;['signal-labels', 'signal-circles'].forEach((id) => { if (m?.getLayer(id)) m.removeLayer(id) })
+    if (m?.getSource('signals')) m.removeSource('signals')
+    if (!m || signals.length === 0) return
+
+    m.addSource('signals', {
+      type: 'geojson',
+      data: {
+        type: 'FeatureCollection',
+        features: signals.map((s) => ({
+          type: 'Feature' as const,
+          geometry: { type: 'Point' as const, coordinates: [s.lon, s.lat] },
+          properties: {
+            name: s.name || 'Semáforo',
+            green: s.green_duration,
+            yellow: s.yellow_duration,
+            red: s.red_duration,
+          },
+        })),
+      },
+    })
+    m.addLayer({
+      id: 'signal-circles',
+      type: 'circle',
+      source: 'signals',
+      paint: {
+        'circle-radius': 5,
+        'circle-color': '#22c55e',
+        'circle-stroke-width': 2,
+        'circle-stroke-color': '#ffffff',
+        'circle-opacity': 0.85,
+      },
+    })
+    m.addLayer({
+      id: 'signal-labels',
+      type: 'symbol',
+      source: 'signals',
+      layout: {
+        'text-field': '🚦',
+        'text-size': 10,
+        'text-anchor': 'center',
+        'text-allow-overlap': false,
+      },
     })
   }
 
@@ -356,6 +494,15 @@ export default function MapView({ routeGeometry, samples, trafficSamples, tollPo
       zoom: 5,
     })
     m.addControl(new maplibregl.NavigationControl(), 'bottom-right')
+
+    // GeolocateControl for GPS tracking (T2)
+    const geolocate = new maplibregl.GeolocateControl({
+      positionOptions: { enableHighAccuracy: true },
+      trackUserLocation: true,
+    } as any)
+    m.addControl(geolocate, 'bottom-right')
+    geolocateRef.current = geolocate
+
     m.once('load', () => m.resize())
 
     // Click handler for sample circles
@@ -462,6 +609,29 @@ export default function MapView({ routeGeometry, samples, trafficSamples, tollPo
       hoverPopupRef.current = null
     })
 
+    // ── Traffic light points: hover popup ─────────────────────
+    m.on('mouseenter', 'signal-circles', (e) => {
+      if (!e.features?.[0]) return
+      const coords = (e.features[0].geometry as any).coordinates.slice()
+      const p = e.features[0].properties!
+      m.getCanvas().style.cursor = 'pointer'
+      hoverPopupRef.current?.remove()
+      hoverPopupRef.current = new maplibregl.Popup({ offset: 8, closeButton: false, maxWidth: '180px' })
+        .setLngLat(coords)
+        .setHTML(`
+          <div style="font-family:system-ui;font-size:11px;line-height:1.6">
+            <span style="display:inline-block;background:#22c55e;color:#fff;font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px;margin-bottom:2px">🚦 Semáforo</span><br/>
+            ${p.name ? `<b>${p.name}</b><br/>` : ''}
+            🟢 ${p.green}s · 🟡 ${p.yellow}s · 🔴 ${p.red}s
+          </div>`)
+        .addTo(m)
+    })
+    m.on('mouseleave', 'signal-circles', () => {
+      m.getCanvas().style.cursor = ''
+      hoverPopupRef.current?.remove()
+      hoverPopupRef.current = null
+    })
+
     map.current = m
     return () => { m.remove() }
   }, [])
@@ -477,7 +647,7 @@ export default function MapView({ routeGeometry, samples, trafficSamples, tollPo
   // ── Route geometry change ────────────────────────────────────
   useEffect(() => {
     if (!map.current || !routeGeometry) return
-    const doIt = () => { addRouteLayers(); addSampleLayers() }
+    const doIt = () => { addRouteLayers(); addCongestionLayers(); addSampleLayers(); addTrafficLightLayers() }
     if (map.current.isStyleLoaded()) doIt()
     else map.current.once('styledata', doIt)
   }, [routeGeometry])
@@ -502,6 +672,29 @@ export default function MapView({ routeGeometry, samples, trafficSamples, tollPo
     if (map.current.isStyleLoaded()) addAccidentLayers()
     else map.current.once('styledata', () => addAccidentLayers())
   }, [accidentPoints])
+
+  // ── Congestion segments change ──────────────────────────────
+  useEffect(() => {
+    if (!map.current) return
+    const doIt = () => { addRouteLayers(); addCongestionLayers() }
+    if (map.current.isStyleLoaded()) doIt()
+    else map.current.once('styledata', doIt)
+  }, [congestionSegments])
+
+  // ── Traffic light points change ─────────────────────────────
+  useEffect(() => {
+    if (!map.current) return
+    if (map.current.isStyleLoaded()) addTrafficLightLayers()
+    else map.current.once('styledata', () => addTrafficLightLayers())
+  }, [trafficLightPoints])
+
+  // ── Navigation mode: trigger geolocate ──────────────────────
+  useEffect(() => {
+    if (navigationMode && geolocateRef.current && map.current) {
+      // Trigger GPS tracking
+      try { geolocateRef.current.trigger() } catch { /* ignore if not ready */ }
+    }
+  }, [navigationMode])
 
   // ── Reverse geocode ──────────────────────────────────────────
   useEffect(() => {
@@ -572,6 +765,28 @@ export default function MapView({ routeGeometry, samples, trafficSamples, tollPo
         {routeGeometry && (
           <button onClick={fitToRoute} className="p-2.5 bg-blue-600 hover:bg-blue-700 rounded-md shadow-md transition" title="Ajustar visualização da rota">
             <FiTarget className="w-5 h-5 text-white" />
+          </button>
+        )}
+        {routeGeometry && !navigationMode && (
+          <button
+            onClick={() => {
+              if (geolocateRef.current) {
+                try { geolocateRef.current.trigger() } catch { /* ignore */ }
+              }
+            }}
+            className="p-2.5 bg-green-600 hover:bg-green-700 rounded-md shadow-md transition"
+            title="Iniciar Navegação GPS"
+          >
+            <FiNavigation className="w-5 h-5 text-white" />
+          </button>
+        )}
+        {navigationMode && (
+          <button
+            onClick={onNavigationEnd}
+            className="p-2.5 bg-red-600 hover:bg-red-700 rounded-md shadow-md transition"
+            title="Parar Navegação"
+          >
+            <FiX className="w-5 h-5 text-white" />
           </button>
         )}
         <button

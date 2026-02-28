@@ -29,6 +29,7 @@ from app.schemas import (
     RouteSummary,
     WeatherSample,
 )
+from app.services.traffic_light_service import TrafficLightService
 
 settings = get_settings()
 BRT = ZoneInfo("America/Sao_Paulo")
@@ -43,6 +44,7 @@ class RouteService:
         self.traffic = TrafficClient()
         self.toll = TollClient()
         self.geocoding = GeocodingClient()
+        self.traffic_lights = TrafficLightService()
 
     # ── Pipeline completo (chamado em background) ────────────────
 
@@ -130,13 +132,27 @@ class RouteService:
             min_lat, max_lat = min(lats), max(lats)
             min_lon, max_lon = min(lons), max(lons)
 
-            # 5. Busca trânsito, pedágios e acidentes em paralelo
-            traffic_data, toll_points, accident_points = await asyncio.gather(
+            # 5. Busca trânsito, pedágios, acidentes, segmentos de congestionamento
+            #    e semáforos em paralelo
+            route_coords = route_data["geometry"].get("coordinates", [])
+            (
+                traffic_data,
+                toll_points,
+                accident_points,
+                congestion_segments,
+                traffic_light_points,
+            ) = await asyncio.gather(
                 self.traffic.get_route_traffic(
                     points, departure_time, route_data["duration_min"]
                 ),
                 self.toll.get_toll_points(min_lat, min_lon, max_lat, max_lon),
                 self.traffic.get_incidents(min_lat, min_lon, max_lat, max_lon),
+                self.traffic.build_congestion_segments(
+                    route_coords, departure_time, route_data["duration_min"]
+                ),
+                self.traffic_lights.get_route_signals(
+                    min_lat, min_lon, max_lat, max_lon
+                ),
             )
 
             # 6. Estima atraso em semáforos
@@ -160,6 +176,8 @@ class RouteService:
                 "traffic_samples": traffic_data["samples"],
                 "toll_points": toll_points,
                 "accident_points": accident_points,
+                "congestion_segments": congestion_segments,
+                "traffic_light_points": traffic_light_points,
             }
 
             update_job(route_id, status=RouteStatus.COMPLETED, result=result)

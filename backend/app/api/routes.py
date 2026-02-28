@@ -155,6 +155,10 @@ async def get_route(route_id: str):
         segments=result.get("segments"),
         traffic_summary=result.get("traffic_summary"),
         traffic_samples=result.get("traffic_samples"),
+        toll_points=result.get("toll_points"),
+        accident_points=result.get("accident_points"),
+        congestion_segments=result.get("congestion_segments"),
+        traffic_light_points=result.get("traffic_light_points"),
         created_at=job.get("created_at"),
     )
 
@@ -253,6 +257,32 @@ async def holidays(
 
 # ═══════════════════════════════════════════════════════════════
 # GET /health — Health check
+# ═══════════════════════════════════════════════════════════════
+# GET /nearby-signals — Semáforos próximos ao ponto atual
+# ═══════════════════════════════════════════════════════════════
+
+@router.get(
+    "/nearby-signals",
+    tags=["traffic"],
+    summary="Semáforos próximos a uma coordenada",
+    description="""
+    Retorna semáforos (highway=traffic_signals) num raio ao redor do ponto.
+    Usado no modo navegação para detectar proximidade de semáforos.
+    """,
+)
+async def nearby_signals(
+    lat: float = Query(..., ge=-90, le=90),
+    lon: float = Query(..., ge=-180, le=180),
+    radius_m: int = Query(500, ge=50, le=5000, description="Raio em metros"),
+):
+    from app.services.traffic_light_service import TrafficLightService
+    svc = TrafficLightService()
+    signals = await svc.get_nearby_signals(lat, lon, radius_m)
+    return {"signals": signals, "count": len(signals)}
+
+
+# ═══════════════════════════════════════════════════════════════
+# GET /health — Saúde da aplicação
 # ═══════════════════════════════════════════════════════════════
 
 @router.get(
